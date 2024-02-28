@@ -17,7 +17,10 @@ package controllers
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -271,53 +274,113 @@ func CheckAndMountCACertBundle(ctx context.Context, cli client.Client, notebook 
 
 	configMapName := "odh-trusted-ca-bundle"
 
-	// Fetch the list of ConfigMaps from the cluster
-	configMapList := &corev1.ConfigMapList{}
-	if err := cli.List(ctx, configMapList); err != nil {
+	// get configmap based on its name and the namespace
+	configMap := &corev1.ConfigMap{}
+	if err := cli.Get(ctx, client.ObjectKey{Namespace: notebook.Namespace, Name: configMapName}, configMap); err != nil {
 		return err
 	}
 
 	// Search for the odh-trusted-ca-bundle ConfigMap
-	for i := range configMapList.Items {
-		cm := &configMapList.Items[i]
-		if cm.Name == configMapName {
+	fmt.Printf("ConfigMap found on the given Namespace")
+	cm := configMap
 
-			volumeName := "trusted-ca"
-			volumeMountPath := "/etc/pki/ca-trust/extracted/pem"
-			volumeMount := corev1.VolumeMount{
+	// Validate certificates before mounting
+	if err := certValidator(cm); err != nil {
+		return err
+	}
+
+	if cm.Name == configMapName {
+
+		volumeName := "trusted-ca"
+		caVolumeMountPath := "/etc/pki/tls/certs/ca-bundle.crt"
+		odhVolumeMountPath := "/etc/pki/tls/certs/odh-ca-bundle.crt"
+		// Define volume mounts for both certificates
+		volumeMounts := []corev1.VolumeMount{
+			{
 				Name:      volumeName,
-				MountPath: volumeMountPath,
+				MountPath: caVolumeMountPath,
+				SubPath:   "ca-bundle.crt",
 				ReadOnly:  true,
-			}
+			},
+			{
+				Name:      volumeName,
+				MountPath: odhVolumeMountPath,
+				SubPath:   "odh-ca-bundle.crt",
+				ReadOnly:  true,
+			},
+		}
 
-			// Add volume mount to the pod's spec
-			notebook.Spec.Template.Spec.Containers[0].VolumeMounts = append(notebook.Spec.Template.Spec.Containers[0].VolumeMounts, volumeMount)
+		// Add volume mount to the pod's spec
+		notebook.Spec.Template.Spec.Containers[0].VolumeMounts = append(notebook.Spec.Template.Spec.Containers[0].VolumeMounts, volumeMounts...)
 
-			// Create volume for mounting the CA certificate from the ConfigMap with key and path
-			configMapVolume := corev1.Volume{
-				Name: volumeName,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
-						Optional:             pointer.Bool(true),
-						Items: []corev1.KeyToPath{
-							{
-								Key:  "ca-bundle.crt",
-								Path: "tls-ca-bundle.pem",
-							},
+		// Create volume for mounting the CA certificate from the ConfigMap with key and path
+		configMapVolume := corev1.Volume{
+			Name: volumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
+					Optional:             pointer.Bool(true),
+					Items: []corev1.KeyToPath{
+						{
+							Key:  "ca-bundle.crt",
+							Path: "ca-bundle.crt",
+						},
+						{
+							Key:  "odh-ca-bundle.crt",
+							Path: "odh-ca-bundle.crt",
 						},
 					},
 				},
-			}
-
-			// Add volume to the pod's spec
-			notebook.Spec.Template.Spec.Volumes = append(notebook.Spec.Template.Spec.Volumes, configMapVolume)
-
-			return nil
+			},
 		}
+
+		// Add volume to the pod's spec
+		notebook.Spec.Template.Spec.Volumes = append(notebook.Spec.Template.Spec.Volumes, configMapVolume)
+
+		return nil
 	}
 
 	// If specified ConfigMap not found
 	fmt.Printf("%s ConfigMap not found\n", configMapName)
+	return nil
+}
+
+func certValidator(cm *corev1.ConfigMap) error {
+	caCertData, ok := cm.Data["ca-bundle.crt"]
+	if !ok {
+		return errors.New("ca-bundle.crt not found in the ConfigMap")
+	}
+
+	// Attempt to decode PEM encoded certificate
+	caBlock, _ := pem.Decode([]byte(caCertData))
+	if caBlock != nil && caBlock.Type == "CERTIFICATE" {
+		// Attempt to parse the certificate
+		_, err := x509.ParseCertificate(caBlock.Bytes)
+		if err != nil {
+			return fmt.Errorf("error parsing certificate for key 'ca-bundle.crt' in ConfigMap odh-trusted-ca-bundle: %v", err)
+		}
+	} else if len(caCertData) > 0 {
+		return fmt.Errorf("invalid certificate format for key 'ca-bundle.crt' in ConfigMap odh-trusted-ca-bundle")
+	}
+
+	odhCertData, ok := cm.Data["odh-ca-bundle.crt"]
+	if !ok || odhCertData == "" {
+		// Print a warning if odh-ca-bundle.crt data is empty
+		fmt.Println("Warning: odh-ca-bundle.crt data is empty")
+		return nil
+	}
+
+	// Attempt to decode PEM encoded certificate
+	odhBlock, _ := pem.Decode([]byte(odhCertData))
+	if odhBlock != nil && odhBlock.Type == "CERTIFICATE" {
+		// Attempt to parse the certificate
+		_, err := x509.ParseCertificate(odhBlock.Bytes)
+		if err != nil {
+			return fmt.Errorf("error parsing certificate for key 'odh-ca-bundle.crt' in ConfigMap odh-trusted-ca-bundle: %v", err)
+		}
+	} else if len(odhCertData) > 0 {
+		return fmt.Errorf("invalid certificate format for key 'odh-ca-bundle.crt' in ConfigMap odh-trusted-ca-bundle")
+	}
+
 	return nil
 }

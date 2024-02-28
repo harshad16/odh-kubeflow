@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
 	"github.com/kubeflow/kubeflow/components/notebook-controller/pkg/culler"
@@ -271,50 +272,110 @@ func CheckAndMountCACertBundle(ctx context.Context, cli client.Client, notebook 
 
 	configMapName := "odh-trusted-ca-bundle"
 
-	// Fetch the list of ConfigMaps from the cluster
-	configMapList := &corev1.ConfigMapList{}
-	if err := cli.List(ctx, configMapList); err != nil {
+	// get configmap based on the name
+	configMap := &corev1.ConfigMap{}
+	if err := cli.Get(ctx, client.ObjectKey{Namespace: notebook.Namespace, Name: configMapName}, configMap); err != nil {
 		return err
 	}
 
+	// Fetch the list of ConfigMaps from the cluster
+	// configMapList := &corev1.ConfigMapList{}
+	// if err := cli.List(ctx, configMapList); err != nil {
+	// 	return err
+	// }
+
+	// We will mount the certs at /etc/pki/custom-certs so we don't override the existing certs
+	sslCertDir := "/etc/pki/custom-certs"
+
+	// Possible directories with certificate files; all will be read.
+	var certDirectories = []string{
+		"/etc/pki/custom-certs",                          // ODH trusted CA bundle
+		"/etc/ssl/certs",                                 // SLES10/SLES11, https://golang.org/issue/12139
+		"/etc/pki/tls/certs",                             // Fedora/RHEL
+		"/etc/pki/ca-trust/extracted/pem",                // CentOS/RHEL 7
+		"/var/run/secrets/kubernetes.io/serviceaccount/", // Kubernetes service account
+	}
+
 	// Search for the odh-trusted-ca-bundle ConfigMap
-	for i := range configMapList.Items {
-		cm := &configMapList.Items[i]
-		if cm.Name == configMapName {
+	fmt.Printf("configMap: %v\n", configMap)
+	cm := configMap
+	if cm.Name == configMapName {
 
-			volumeName := "trusted-ca"
-			volumeMountPath := "/etc/pki/ca-trust/extracted/pem"
-			volumeMount := corev1.VolumeMount{
-				Name:      volumeName,
-				MountPath: volumeMountPath,
-				ReadOnly:  true,
-			}
+		volumeName := "trusted-ca"
+		volumeMount := corev1.VolumeMount{
+			Name:      volumeName,
+			MountPath: sslCertDir,
+			ReadOnly:  true,
+		}
 
-			// Add volume mount to the pod's spec
-			notebook.Spec.Template.Spec.Containers[0].VolumeMounts = append(notebook.Spec.Template.Spec.Containers[0].VolumeMounts, volumeMount)
+		// Add volume mount to the pod's spec
+		notebook.Spec.Template.Spec.Containers[0].VolumeMounts = append(notebook.Spec.Template.Spec.Containers[0].VolumeMounts, volumeMount)
 
-			// Create volume for mounting the CA certificate from the ConfigMap with key and path
-			configMapVolume := corev1.Volume{
-				Name: volumeName,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
-						Optional:             pointer.Bool(true),
-						Items: []corev1.KeyToPath{
-							{
-								Key:  "ca-bundle.crt",
-								Path: "tls-ca-bundle.pem",
-							},
+		// Create volume for mounting the CA certificate from the ConfigMap with key and path
+		configMapVolume := corev1.Volume{
+			Name: volumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
+					Optional:             pointer.Bool(true),
+					Items: []corev1.KeyToPath{
+						{
+							Key:  "ca-bundle.crt",
+							Path: "ca-bundle.crt",
+						},
+						{
+							Key:  "odh-ca-bundle.crt",
+							Path: "odh-ca-bundle.crt",
 						},
 					},
 				},
-			}
-
-			// Add volume to the pod's spec
-			notebook.Spec.Template.Spec.Volumes = append(notebook.Spec.Template.Spec.Volumes, configMapVolume)
-
-			return nil
+			},
 		}
+
+		// Search for the odh-trusted-ca-bundle ConfigMap
+		// for i := range configMapList.Items {
+		// 	cm := &configMapList.Items[i]
+		// 	if cm.Name == configMapName {
+
+		// 		volumeName := "trusted-ca"
+		// 		volumeMountPath := "/etc/pki/ca-trust/extracted/pem"
+		// 		volumeMount := corev1.VolumeMount{
+		// 			Name:      volumeName,
+		// 			MountPath: volumeMountPath,
+		// 			ReadOnly:  true,
+		// 		}
+
+		// 		// Add volume mount to the pod's spec
+		// 		notebook.Spec.Template.Spec.Containers[0].VolumeMounts = append(notebook.Spec.Template.Spec.Containers[0].VolumeMounts, volumeMount)
+
+		// 		// Create volume for mounting the CA certificate from the ConfigMap with key and path
+		// 		configMapVolume := corev1.Volume{
+		// 			Name: volumeName,
+		// 			VolumeSource: corev1.VolumeSource{
+		// 				ConfigMap: &corev1.ConfigMapVolumeSource{
+		// 					LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
+		// 					Optional:             pointer.Bool(true),
+		// 					Items: []corev1.KeyToPath{
+		// 						{
+		// 							Key:  "ca-bundle.crt",
+		// 							Path: "tls-ca-bundle.pem",
+		// 						},
+		// 					},
+		// 				},
+		// 			},
+		// 		}
+
+		// Add volume to the pod's spec
+		notebook.Spec.Template.Spec.Volumes = append(notebook.Spec.Template.Spec.Volumes, configMapVolume)
+
+		// SSL_CERT_DIR accepts a colon separated list of directories
+		sslCertDir = strings.Join(certDirectories, ":")
+		notebook.Spec.Template.Spec.Containers[0].Env = append(notebook.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{
+			Name:  "SSL_CERT_DIR",
+			Value: sslCertDir,
+		})
+
+		return nil
 	}
 
 	// If specified ConfigMap not found

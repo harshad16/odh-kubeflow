@@ -139,6 +139,7 @@ var _ = BeforeSuite(func() {
 	hookServer := mgr.GetWebhookServer()
 	notebookWebhook := &webhook.Admission{
 		Handler: &NotebookWebhook{
+			Log:    ctrl.Log.WithName("controllers").WithName("notebook-controller"),
 			Client: mgr.GetClient(),
 			OAuthConfig: OAuthConfig{
 				ProxyImage: OAuthProxyImage,

@@ -114,6 +114,7 @@ func main() {
 	hookServer := mgr.GetWebhookServer()
 	notebookWebhook := &webhook.Admission{
 		Handler: &controllers.NotebookWebhook{
+			Log:    ctrl.Log.WithName("controllers").WithName("Notebook"),
 			Client: mgr.GetClient(),
 			OAuthConfig: controllers.OAuthConfig{
 				ProxyImage: oauthProxyImage,

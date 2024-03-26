@@ -159,8 +159,11 @@ func (r *NotebookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	// Update the foundStateful object and write the result back if there are any changes
-	if !justCreated && reconcilehelper.CopyStatefulSetFields(ss, foundStateful) {
+	requiresUpdate := reconcilehelper.CopyStatefulSetFields(ss, foundStateful)
+	log.Info(fmt.Sprintf("requiresUpdate: %v", requiresUpdate))
+	if !justCreated && requiresUpdate {
 		log.Info("Updating StatefulSet", "namespace", ss.Namespace, "name", ss.Name)
+		log.Info(fmt.Sprintf("-------------------:%s,\n%s", requiresUpdate, foundStateful))
 		err = r.Update(ctx, foundStateful)
 		if err != nil {
 			log.Error(err, "unable to update Statefulset")
@@ -415,8 +418,9 @@ func generateStatefulSet(instance *v1beta1.Notebook) *appsv1.StatefulSet {
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
-					"statefulset":   instance.Name,
-					"notebook-name": instance.Name,
+					"statefulset":                instance.Name,
+					"notebook-name":              instance.Name,
+					"opendatahub.io/workbenches": "true",
 				}},
 				Spec: *instance.Spec.Template.Spec.DeepCopy(),
 			},

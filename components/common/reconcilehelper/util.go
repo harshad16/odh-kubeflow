@@ -122,6 +122,12 @@ func CopyStatefulSetFields(from, to *appsv1.StatefulSet) bool {
 
 	if *from.Spec.Replicas != *to.Spec.Replicas {
 		*to.Spec.Replicas = *from.Spec.Replicas
+
+		// Copy the pod template labels, but reconcilation is not required
+		// exclusively based on ths pod template labels
+		if !reflect.DeepEqual(to.Spec.Template.ObjectMeta.Labels, from.Spec.Template.ObjectMeta.Labels) {
+			to.Spec.Template.ObjectMeta.Labels = from.Spec.Template.ObjectMeta.Labels
+		}
 		requireUpdate = true
 	}
 

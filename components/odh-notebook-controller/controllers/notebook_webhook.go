@@ -36,12 +36,23 @@ import (
 
 //+kubebuilder:webhook:path=/mutate-notebook-v1,mutating=true,failurePolicy=fail,sideEffects=None,groups=kubeflow.org,resources=notebooks,verbs=create;update,versions=v1,name=notebooks.opendatahub.io,admissionReviewVersions=v1
 
+// AnnotationTrustedCA is the annotation key to indicate the ConfigMap is mounted
+const AnnotationTrustedCA = "notebook.opendatahub.io/trusted-ca"
+
 // NotebookWebhook holds the webhook configuration.
 type NotebookWebhook struct {
 	Log         logr.Logger
 	Client      client.Client
 	Decoder     *admission.Decoder
 	OAuthConfig OAuthConfig
+}
+
+// TrustedCAIsEnabled checks if the AnnotationTrustedCA is present
+func TrustedCAIsEnabled(meta metav1.ObjectMeta) bool {
+	if val, ok := meta.Annotations[AnnotationTrustedCA]; ok && val != "" {
+		return true
+	}
+	return false
 }
 
 // InjectReconciliationLock injects the kubeflow notebook controller culling
@@ -248,6 +259,15 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 		}
 	}
 
+	// Check if AnnotationTrustedCA is present and mount the ConfigMap
+	if TrustedCAIsEnabled(notebook.ObjectMeta) {
+		err = CheckAndMountCACertBundle(ctx, w.Client, notebook, log)
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		log.Info("Trusted CA ConfigMap mounted")
+	}
+
 	// Inject the OAuth proxy if the annotation is present but only if Service Mesh is disabled
 	if OAuthInjectionIsEnabled(notebook.ObjectMeta) {
 		if ServiceMeshIsEnabled(notebook.ObjectMeta) {
@@ -317,13 +337,21 @@ func CheckAndMountCACertBundle(ctx context.Context, cli client.Client, notebook 
 	cm := workbenchConfigMap
 	if cm.Name == workbenchConfigMapName {
 		// Inject the trusted-ca volume and environment variables
-		log.Info("Injecting trusted-ca volume and environment variables", notebook.Name, "namespace", notebook.Namespace)
+		log.Info("Injecting trusted-ca volume and environment variables")
 		return InjectCertConfig(notebook, workbenchConfigMapName)
 	}
 	return nil
 }
 
 func InjectCertConfig(notebook *nbv1.Notebook, configMapName string) error {
+
+	// Set an annotation to indicate that the ConfigMap is mounted
+	if notebook.ObjectMeta.Annotations == nil {
+		notebook.ObjectMeta.Annotations = make(map[string]string)
+	}
+	if val, ok := notebook.ObjectMeta.Annotations[AnnotationTrustedCA]; !ok || val != configMapName {
+		notebook.ObjectMeta.Annotations[AnnotationTrustedCA] = configMapName
+	}
 
 	// ConfigMap details
 	configVolumeName := "trusted-ca"

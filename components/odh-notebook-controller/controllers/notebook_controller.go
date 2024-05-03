@@ -424,6 +424,9 @@ func (r *OpenshiftNotebookReconciler) UnsetNotebookCertConfig(notebook *nbv1.Not
 	}
 
 	if notebookSpecChanged {
+		// Unset the annotation trusted-ca-bundle
+		delete(copyNotebook.ObjectMeta.Annotations, "notebook.opendatahub.io/trusted-ca")
+
 		// Update the notebook with the new container
 		err := r.Patch(ctx, copyNotebook, patch)
 		if err != nil {

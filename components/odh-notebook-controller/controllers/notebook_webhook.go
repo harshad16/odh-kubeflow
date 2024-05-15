@@ -246,6 +246,13 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 		if err != nil {
 			return admission.Errored(http.StatusInternalServerError, err)
 		}
+
+		// Inject the image trigger annotation to the new notebook
+		err = InjectImageTriggerAnnotation(notebook)
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+
 	}
 
 	// Inject the OAuth proxy if the annotation is present but only if Service Mesh is disabled
@@ -271,6 +278,23 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 // InjectDecoder injects the decoder.
 func (w *NotebookWebhook) InjectDecoder(d *admission.Decoder) error {
 	w.Decoder = d
+	return nil
+}
+
+// InjectImageTriggerAnnotation injects the trigger annotation to the notebook
+func InjectImageTriggerAnnotation(notebook *nbv1.Notebook) error {
+
+	// Add the trigger annotation to the notebook
+	if imageSelection, ok := notebook.Annotations["notebooks.opendatahub.io/last-image-selection"]; ok {
+		trigger := fmt.Sprintf(`[{"from":{"kind":"ImageStreamTag","name":"%s","namespace":"%s"},"fieldPath":"spec.template.spec.containers[?(@.name==\'%s\')].image"}]`,
+			imageSelection, notebook.Namespace, notebook.Name)
+
+		if notebook.Annotations == nil {
+			notebook.Annotations = make(map[string]string)
+		}
+		notebook.Annotations["image.openshift.io/triggers"] = trigger
+	}
+
 	return nil
 }
 

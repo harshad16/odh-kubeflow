@@ -19,8 +19,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"time"
@@ -178,6 +180,14 @@ func (r *OpenshiftNotebookReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
+	// Inject the ImageTriggerAnnotation to update the workbench image
+	// when the imagestream information is available via
+	// annotation `notebooks.opendatahub.io/last-image-selection`
+	err = r.InjectImageTriggerAnnotation(notebook, ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Call the Network Policies reconciler
 	err = r.ReconcileAllNetworkPolicies(notebook, ctx)
 	if err != nil {
@@ -231,13 +241,54 @@ func (r *OpenshiftNotebookReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return ctrl.Result{}, nil
 }
 
+// InjectImageTriggerAnnotation injects the trigger annotation to the notebook
+func (r *OpenshiftNotebookReconciler) InjectImageTriggerAnnotation(notebook *nbv1.Notebook, ctx context.Context) error {
+
+	// Initialize logger format
+	log := r.Log.WithValues("notebook", notebook.Name, "namespace", notebook.Namespace)
+	var isTriggerPaused string
+
+	// Add the trigger annotation to the notebook
+	instance := notebook.DeepCopy()
+	patch := client.MergeFrom(notebook.DeepCopy())
+	instanceStatus := instance.Status
+	imageSelection := instance.Annotations["notebooks.opendatahub.io/last-image-selection"]
+	triggerContent := `[{"from":{"kind":"ImageStreamTag","name":"%s","namespace":"%s"},"fieldPath":"spec.template.spec.containers[?(@.name==\'%s\')].image"}, "paused":%t]`
+	err := json.Unmarshal([]byte(instance.Annotations["image.openshift.io/triggers"]), &isTriggerPaused)
+	if err != nil {
+		log.Error(err, "Unable to unmarshal the ImageTriggerAnnotation")
+	}
+
+	log.Info("Current Notebook Status", "ReadyReplicas", instanceStatus.ReadyReplicas, "Paused", isTriggerPaused)
+
+	if instanceStatus.ReadyReplicas > 0 && isTriggerPaused == "true" {
+		trigger := fmt.Sprintf(triggerContent, imageSelection, instance.Namespace, instance.Name, true)
+		instance.Annotations["image.openshift.io/triggers"] = trigger
+		log.Info("Set ImageTriggerAnnotation paused to true")
+		err := r.Patch(ctx, instance, patch)
+		if err != nil {
+			return err
+		}
+		return nil
+	} else {
+		trigger := fmt.Sprintf(triggerContent, imageSelection, instance.Namespace, instance.Name, false)
+		instance.Annotations["image.openshift.io/triggers"] = trigger
+		log.Info("Set ImageTriggerAnnotation paused to false")
+		err := r.Patch(ctx, instance, patch)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+
+}
+
 // createNotebookCertConfigMap creates a ConfigMap workbench-trusted-ca-bundle
 // that contains the root certificates from the ConfigMap odh-trusted-ca-bundle
 // and the self-signed certificates from the ConfigMap kube-root-ca.crt
 // The ConfigMap workbench-trusted-ca-bundle is used by the notebook to trust
 // the root and self-signed certificates.
-func (r *OpenshiftNotebookReconciler) CreateNotebookCertConfigMap(notebook *nbv1.Notebook,
-	ctx context.Context) error {
+func (r *OpenshiftNotebookReconciler) CreateNotebookCertConfigMap(notebook *nbv1.Notebook, ctx context.Context) error {
 
 	// Initialize logger format
 	log := r.Log.WithValues("notebook", notebook.Name, "namespace", notebook.Namespace)

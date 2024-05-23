@@ -20,15 +20,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
 	"github.com/kubeflow/kubeflow/components/notebook-controller/pkg/culler"
+	imagev1 "github.com/openshift/client-go/image/clientset/versioned/typed/image/v1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	rest "k8s.io/client-go/rest"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -42,6 +46,12 @@ type NotebookWebhook struct {
 	Client      client.Client
 	Decoder     *admission.Decoder
 	OAuthConfig OAuthConfig
+}
+
+// check if string is valid date format
+func isDateValue(stringDate string) bool {
+	_, err := time.Parse(time.RFC3339, stringDate)
+	return err == nil
 }
 
 // InjectReconciliationLock injects the kubeflow notebook controller culling
@@ -246,6 +256,20 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 		if err != nil {
 			return admission.Errored(http.StatusInternalServerError, err)
 		}
+
+		// Check if there is an internal registry and set the container.image value
+		err = SetContainerImageFromRegistry(ctx, w.Client, notebook, log)
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+	}
+
+	// Inject internal registry image if the notebook stopped
+	if isDateValue(notebook.ObjectMeta.Annotations[culler.STOP_ANNOTATION]) {
+		err = SetContainerImageFromRegistry(ctx, w.Client, notebook, log)
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
 	}
 
 	// Inject the OAuth proxy if the annotation is present but only if Service Mesh is disabled
@@ -271,6 +295,82 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 // InjectDecoder injects the decoder.
 func (w *NotebookWebhook) InjectDecoder(d *admission.Decoder) error {
 	w.Decoder = d
+	return nil
+}
+
+// SetContainerImageFromRegistry checks if there is an internal registry and takes the corresponding actions to set the container.image value.
+// If an internal registry is detected, it uses the default values specified in the Notebook Custom Resource (CR).
+// Otherwise, it checks the last-image-selection annotation to find the image stream and fetches the image from status.dockerImageReference,
+// assigning it to the container.image value.
+func SetContainerImageFromRegistry(ctx context.Context, cli client.Client, notebook *nbv1.Notebook, log logr.Logger) error {
+
+	annotations := notebook.GetAnnotations()
+	if annotations != nil {
+		if imageSelection, exists := annotations["notebooks.opendatahub.io/last-image-selection"]; exists {
+			// Check if the image selection has an internal registry, if so  will pickup this. This value constructed on the initialization of the Notebook CR.
+			if strings.Contains(notebook.Spec.Template.Spec.Containers[0].Image, "image-registry.openshift-image-registry.svc:5000") {
+				log.Info("Internal registry found. Will pickup the default value from image field.")
+				return nil
+			} else {
+
+				// Split the imageSelection to imagestream and tag
+				imageSelected := strings.Split(imageSelection, ":")
+				if len(imageSelected) != 2 {
+					log.Error(nil, "Invalid image selection format")
+					return fmt.Errorf("invalid image selection format")
+				}
+
+				// Specify the namespaces to search in
+				imageNamespaces := []string{"opendatahub", "redhat-ods-applications"}
+				imagestreamFound := false
+				config, err := rest.InClusterConfig()
+				if err != nil {
+					log.Error(err, "Failed to get in-cluster config")
+					return fmt.Errorf("failed to get in-cluster config")
+				}
+
+				for _, selectNamespace := range imageNamespaces {
+					imageClient, err := imagev1.NewForConfig(config)
+					if err != nil {
+						log.Error(err, "Failed to create imagestream client")
+						return fmt.Errorf("failed to create imagestream client")
+					}
+
+					imagestream, err := imageClient.ImageStreams(selectNamespace).Get(ctx, imageSelected[0], metav1.GetOptions{})
+					log.Info(fmt.Sprintf("Searching for ImageStream %s:%s in %s namespace", imageSelected[0], imageSelected[1], selectNamespace))
+
+					if imagestream == nil {
+						log.Info(fmt.Sprintf("ImageStream is not present in the namespace %s", selectNamespace))
+						continue
+					}
+
+					imageTags := imagestream.Status.Tags
+					for _, tag := range imageTags {
+						if tag.Tag == imageSelected[1] {
+							// Update the container image
+							imageHash := tag.Items[0].DockerImageReference
+							notebook.Spec.Template.Spec.Containers[0].Image = imageHash
+							// Update the JUPYTER_IMAGE environment variable
+							for i, envVar := range notebook.Spec.Template.Spec.Containers[0].Env {
+								if envVar.Name == "JUPYTER_IMAGE" {
+									notebook.Spec.Template.Spec.Containers[0].Env[i].Value = imageHash
+									break
+								}
+							}
+							log.Info(fmt.Sprintf("ImageStream %s:%s found and updated in %s namespace", imageSelected[0], imageSelected[1], selectNamespace))
+							imagestreamFound = true
+							break
+						}
+					}
+				}
+
+				if !imagestreamFound {
+					log.Info("ImageStream not found in the specified namespaces")
+					return fmt.Errorf("imagestream not found in the specified namespaces")
+				}
+			}
+		}
+	}
 	return nil
 }
 

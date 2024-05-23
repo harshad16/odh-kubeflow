@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -257,19 +258,12 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 			return admission.Errored(http.StatusInternalServerError, err)
 		}
 
-		// Check if there is an internal registry and set the container.image value
-		err = SetContainerImageFromRegistry(ctx, w.Client, notebook, log)
-		if err != nil {
-			return admission.Errored(http.StatusInternalServerError, err)
-		}
 	}
 
-	// Inject internal registry image if the notebook stopped
-	if isDateValue(notebook.ObjectMeta.Annotations[culler.STOP_ANNOTATION]) {
-		err = SetContainerImageFromRegistry(ctx, w.Client, notebook, log)
-		if err != nil {
-			return admission.Errored(http.StatusInternalServerError, err)
-		}
+	// Check if there is an internal registry and set the container.image value
+	err = SetContainerImageFromRegistry(ctx, w.Client, notebook, log)
+	if err != nil {
+		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
 	// Inject the OAuth proxy if the annotation is present but only if Service Mesh is disabled
@@ -304,14 +298,22 @@ func (w *NotebookWebhook) InjectDecoder(d *admission.Decoder) error {
 // assigning it to the container.image value.
 func SetContainerImageFromRegistry(ctx context.Context, cli client.Client, notebook *nbv1.Notebook, log logr.Logger) error {
 
-	annotations := notebook.GetAnnotations()
-	if annotations != nil {
-		if imageSelection, exists := annotations["notebooks.opendatahub.io/last-image-selection"]; exists {
-			// Check if the image selection has an internal registry, if so  will pickup this. This value constructed on the initialization of the Notebook CR.
-			if strings.Contains(notebook.Spec.Template.Spec.Containers[0].Image, "image-registry.openshift-image-registry.svc:5000") {
-				log.Info("Internal registry found. Will pickup the default value from image field.")
-				return nil
-			} else {
+	// Check if the image selection has an internal registry, if so  will pickup this. This value constructed on the initialization of the Notebook CR.
+	currentImage := notebook.Spec.Template.Spec.Containers[0].Image
+	imageRegex := "^[a-zA-Z0-9-_.]+: [a-zA-Z0-9-_.]+/[a-zA-Z0-9-_.]+/[a-zA-Z0-9-_.]+(:[a-zA-Z0-9-_.]+)?(@[a-fA-F0-9]+)?$"
+	verifiedImage, err := regexp.MatchString(imageRegex, currentImage)
+	if err != nil {
+		log.Error(err, "Failed to verify the image format")
+		return fmt.Errorf("failed to verify the image format")
+	}
+
+	if verifiedImage {
+		log.Info("Image field seems to be valid, skipping the internal registry check..")
+		return nil
+	} else {
+		annotations := notebook.GetAnnotations()
+		if annotations != nil {
+			if imageSelection, exists := annotations["notebooks.opendatahub.io/last-image-selection"]; exists {
 
 				// Split the imageSelection to imagestream and tag
 				imageSelected := strings.Split(imageSelection, ":")

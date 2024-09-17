@@ -1,23 +1,7 @@
 approvers:
-  - atheo89
-  - caponetto
-  - harshad16
-  - jiridanek
-  - jstourac
-  - paulovmr
-
-reviewers:
-  - atheo89
-  - caponetto
-  - dibryant
-  - harshad16
-  - jiridanek
-  - jstourac
-  - paulovmr
-
-emeritus_approvers:
-  - VaishnaviHire
-  - LavLas
-
-emeritus_reviewers:
-  - rkpattnaik780
+  - andreyvelich
+  - james-jwu
+  - jbottum
+  - johnugeorge
+  - terrytangyuan
+  - zijianjoy

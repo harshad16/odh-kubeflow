@@ -19,11 +19,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"math/big"
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
+	oauthv1 "github.com/openshift/api/oauth/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
@@ -39,6 +41,8 @@ const (
 	// taken from https://catalog.redhat.com/software/containers/openshift4/ose-oauth-proxy/5cdb2133bed8bd5717d5ae64?image=6306f12280cc9b3291272668&architecture=amd64&container-tabs=overview
 	// and kept in sync with the manifests here and in ClusterServiceVersion metadata of opendatahub operator
 	OAuthProxyImage = "registry.redhat.io/openshift4/ose-oauth-proxy@sha256:4bef31eb993feb6f1096b51b4876c65a6fb1f4401fee97fa4f4542b6b7c9bc46"
+	// letterRunes is used to generate the random client secret
+	letterRunes = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
 
 type OAuthConfig struct {
@@ -212,6 +216,16 @@ func NewNotebookOAuthSecret(notebook *nbv1.Notebook) *corev1.Secret {
 // NewNotebookOAuthClientSecret defines the desired OAuth client secret object
 func NewNotebookOAuthClientSecret(notebook *nbv1.Notebook) *corev1.Secret {
 	// Generate the client secret for the OAuth proxy
+	randomValue := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letterRunes))))
+		if err != nil {
+			return nil
+		}
+		randomValue[i] = letterRunes[num.Int64()]
+	}
+
+	// Create a Kubernetes secret to store the cookie secret
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      notebook.Name + "-oauth-client",
@@ -219,12 +233,9 @@ func NewNotebookOAuthClientSecret(notebook *nbv1.Notebook) *corev1.Secret {
 			Labels: map[string]string{
 				"notebook-name": notebook.Name,
 			},
-			Annotations: map[string]string{
-				"secret-generator.opendatahub.io/name":               "secret",
-				"secret-generator.opendatahub.io/type":               "random",
-				"secret-generator.opendatahub.io/complexity":         "32",
-				"secret-generator.opendatahub.io/oauth-client-route": notebook.Name,
-			},
+		},
+		StringData: map[string]string{
+			"secret": string(randomValue),
 		},
 	}
 }
@@ -295,6 +306,35 @@ func (r *OpenshiftNotebookReconciler) ReconcileOAuthSecret(notebook *nbv1.Notebo
 			log.Error(err, "Unable to fetch the OAuth Client Secret")
 			return err
 		}
+	}
+
+	// Get OauthClient Route
+	foundClientRoute := &routev1.Route{}
+	err = r.Get(ctx, types.NamespacedName{
+		Name:      notebook.Name,
+		Namespace: notebook.Namespace,
+	}, foundClientRoute)
+	if err != nil {
+		log.Error(err, "Unable to fetch the OAuthClient Route")
+	}
+
+	// Generate OAuthClient for the generated secret
+	log.Info("Generating an OAuthClient CR for route", "route-name", foundClientRoute.Name)
+	desiredAuthClient := &oauthv1.OAuthClient{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "OAuthClient",
+			APIVersion: "oauth.openshift.io/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: notebook.Name,
+		},
+		Secret:       desiredClientSecret.StringData["secret"],
+		RedirectURIs: []string{"https://" + foundClientRoute.Spec.Host},
+		GrantMethod:  oauthv1.GrantHandlerAuto,
+	}
+	err = r.Create(ctx, desiredAuthClient)
+	if err != nil && !apierrs.IsAlreadyExists(err) {
+		log.Error(err, "Unable to create the OAuthClient")
 	}
 
 	return nil

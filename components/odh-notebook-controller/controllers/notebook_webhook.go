@@ -100,6 +100,7 @@ func InjectOAuthProxy(notebook *nbv1.Notebook, oauth OAuthConfig) error {
 			`--client-id=` + notebook.Name + `-oauth-client`,
 			"--client-secret-file=/etc/oauth/client/secret",
 			"--scope=user:full",
+			"--pass-access-token",
 			`--openshift-sar={"verb":"get","resource":"notebooks","resourceAPIGroup":"kubeflow.org",` +
 				`"resourceName":"` + notebook.Name + `","namespace":"$(NAMESPACE)"}`,
 		},
@@ -213,7 +214,7 @@ func InjectOAuthProxy(notebook *nbv1.Notebook, oauth OAuthConfig) error {
 		Name: "oauth-client",
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName:  notebook.Name + "-oauth-client-generated",
+				SecretName:  notebook.Name + "-oauth-client",
 				DefaultMode: pointer.Int32Ptr(420),
 			},
 		},

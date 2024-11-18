@@ -97,8 +97,7 @@ func InjectOAuthProxy(notebook *nbv1.Notebook, oauth OAuthConfig) error {
 			"--upstream-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
 			"--email-domain=*",
 			"--skip-provider-button",
-			`--client-id=` + notebook.Name + `-oauth-client`,
-			"--client-secret-file=/etc/oauth/client/secret",
+			"--client-secret-file=/var/run/secrets/kubernetes.io/serviceaccount/token",
 			"--scope=user:full",
 			`--openshift-sar={"verb":"get","resource":"notebooks","resourceAPIGroup":"kubeflow.org",` +
 				`"resourceName":"` + notebook.Name + `","namespace":"$(NAMESPACE)"}`,
@@ -155,10 +154,6 @@ func InjectOAuthProxy(notebook *nbv1.Notebook, oauth OAuthConfig) error {
 				Name:      "tls-certificates",
 				MountPath: "/etc/tls/private",
 			},
-			{
-				Name:      "oauth-client",
-				MountPath: "/etc/oauth/client",
-			},
 		},
 	}
 
@@ -208,26 +203,26 @@ func InjectOAuthProxy(notebook *nbv1.Notebook, oauth OAuthConfig) error {
 
 	// Add the OAuth Client configuration volume:
 	// https://pkg.go.dev/k8s.io/api/core/v1#Volume
-	clientVolumeExists := false
-	clientVolume := corev1.Volume{
-		Name: "oauth-client",
-		VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName:  notebook.Name + "-oauth-client-generated",
-				DefaultMode: pointer.Int32Ptr(420),
-			},
-		},
-	}
-	for index, volume := range *notebookVolumes {
-		if volume.Name == "oauth-client" {
-			(*notebookVolumes)[index] = clientVolume
-			clientVolumeExists = true
-			break
-		}
-	}
-	if !clientVolumeExists {
-		*notebookVolumes = append(*notebookVolumes, clientVolume)
-	}
+	// clientVolumeExists := false
+	// clientVolume := corev1.Volume{
+	// 	Name: "oauth-client",
+	// 	VolumeSource: corev1.VolumeSource{
+	// 		Secret: &corev1.SecretVolumeSource{
+	// 			SecretName:  notebook.Name + "-oauth-client-generated",
+	// 			DefaultMode: pointer.Int32Ptr(420),
+	// 		},
+	// 	},
+	// }
+	// for index, volume := range *notebookVolumes {
+	// 	if volume.Name == "oauth-client" {
+	// 		(*notebookVolumes)[index] = clientVolume
+	// 		clientVolumeExists = true
+	// 		break
+	// 	}
+	// }
+	// if !clientVolumeExists {
+	// 	*notebookVolumes = append(*notebookVolumes, clientVolume)
+	// }
 
 	// Add the TLS certificates volume:
 	// https://pkg.go.dev/k8s.io/api/core/v1#Volume

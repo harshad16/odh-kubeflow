@@ -362,25 +362,9 @@ func (r *OpenshiftNotebookReconciler) createOAuthClient(notebook *nbv1.Notebook,
 		return err
 	}
 
-	// foundOAuthClient := &oauthv1.OAuthClient{}
-	// err = r.Get(ctx, types.NamespacedName{
-	// 	Name: desiredOAuthClient.Name,
-	// }, foundOAuthClient)
-
-	// if err != nil {
 	log.Info("Creating OAuthClient")
-
-	// Add .metatada.ownerReferences to the service account to be deleted by
-	// the Kubernetes garbage collector if the notebook is deleted
-	// err = ctrl.SetControllerReference(notebook, desiredOAuthClient, r.Scheme)
-	// if err != nil {
-	// log.Error(err, "Unable to add OwnerReference to the OAuthClient")
-	// return err
-	// }
-
 	stringData := string(secret.Data["secret"])
-	// decodedValue, err := base64.StdEncoding.DecodeString(string(stringData))
-	log.Info("secret: ", secret)
+	log.Info("secret: %v", secret)
 
 	oauthClient := &oauthv1.OAuthClient{
 		TypeMeta: metav1.TypeMeta{

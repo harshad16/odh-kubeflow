@@ -19,10 +19,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	configv1 "github.com/openshift/api/config/v1"
 	"net/http"
 	"sort"
 	"strings"
+
+	configv1 "github.com/openshift/api/config/v1"
 
 	"github.com/go-logr/logr"
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
@@ -307,6 +308,7 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 
 	// If cluster-wide-proxy is enabled add environment variables
 	if w.ClusterWideProxyIsEnabled() {
+		log.Info("Cluster-wide proxy is enabled, injecting environment variables")
 		err = InjectProxyConfigEnvVars(notebook)
 		if err != nil {
 			return admission.Errored(http.StatusInternalServerError, err)
@@ -437,13 +439,13 @@ func InjectProxyConfigEnvVars(notebook *nbv1.Notebook) error {
 			}
 
 			// Update container with Proxy Env Changes
-			for index, container := range *notebookContainers {
-				if container.Name == notebook.Name {
-					(*notebookContainers)[index] = imgContainer
-					imgContainerExists = true
-					break
-				}
-			}
+			// for index, container := range *notebookContainers {
+			// 	if container.Name == notebook.Name {
+			// 		(*notebookContainers)[index] = imgContainer
+			// 		imgContainerExists = true
+			// 		break
+			// 	}
+			// }
 
 			if !imgContainerExists {
 				return fmt.Errorf("notebook image container not found %v", notebook.Name)

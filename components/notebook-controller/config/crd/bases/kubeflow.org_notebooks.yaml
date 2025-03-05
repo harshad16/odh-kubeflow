@@ -3050,6 +3050,7 @@ spec:
                               type: object
                             name:
                               type: string
+                              maxLength: 63
                             nfs:
                               properties:
                                 path:

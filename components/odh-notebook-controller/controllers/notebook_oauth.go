@@ -390,6 +390,14 @@ func (r *OpenshiftNotebookReconciler) createOAuthClient(notebook *nbv1.Notebook,
 		GrantMethod:  oauthv1.GrantHandlerAuto,
 	}
 
+	// Add .metatada.ownerReferences to the OAuth client to be deleted by
+	// the Kubernetes garbage collector if the notebook is deleted
+	err = ctrl.SetControllerReference(notebook, oauthClient, r.Scheme)
+	if err != nil {
+		log.Error(err, "Unable to add OwnerReference to oauthClient ", oauthClient.Name)
+		return err
+	}
+
 	err = r.Create(ctx, oauthClient)
 	if err != nil {
 		if apierrs.IsAlreadyExists(err) {
@@ -397,8 +405,7 @@ func (r *OpenshiftNotebookReconciler) createOAuthClient(notebook *nbv1.Notebook,
 			if err != nil {
 				return fmt.Errorf("failed to create OAuth Client: %w", err)
 			}
-			if err = r.Patch(ctx, oauthClient, client.RawPatch(types.ApplyPatchType, data),
-				client.ForceOwnership, client.FieldOwner("rhods-operator")); err != nil {
+			if err = r.Patch(ctx, oauthClient, client.RawPatch(types.ApplyPatchType, data)); err != nil {
 				return fmt.Errorf("failed to patch existing OAuthClient CR: %w", err)
 			}
 			return nil

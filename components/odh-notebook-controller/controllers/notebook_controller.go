@@ -137,7 +137,7 @@ func (r *OpenshiftNotebookReconciler) RemoveReconciliationLock(notebook *nbv1.No
 				return err
 			}
 			if len(serviceAccount.ImagePullSecrets) == 0 {
-				return errors.New("Pull secret not mounted")
+				return errors.New("pull secret not mounted")
 			}
 			return nil
 		},
@@ -358,7 +358,7 @@ func (r *OpenshiftNotebookReconciler) CreateNotebookCertConfigMap(notebook *nbv1
 					r.Log.Info("Created workbench-trusted-ca-bundle ConfigMap", "namespace", notebook.Namespace, "notebook", notebook.Name)
 				}
 			}
-		} else if err == nil && !reflect.DeepEqual(foundTrustedCAConfigMap.Data, desiredTrustedCAConfigMap.Data) {
+		} else if !reflect.DeepEqual(foundTrustedCAConfigMap.Data, desiredTrustedCAConfigMap.Data) {
 			// some data has changed, update the ConfigMap
 			r.Log.Info("Updating workbench-trusted-ca-bundle ConfigMap", "namespace", notebook.Namespace, "notebook", notebook.Name)
 			foundTrustedCAConfigMap.Data = desiredTrustedCAConfigMap.Data

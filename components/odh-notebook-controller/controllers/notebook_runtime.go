@@ -147,8 +147,6 @@ func (r *OpenshiftNotebookReconciler) syncRuntimeImagesConfigMap(ctx context.Con
 				return err
 			}
 			log.Info("Updated existing ConfigMap with new runtime images", "ConfigMap.Name", configMapName)
-		} else {
-			log.Info("ConfigMap already up-to-date", "ConfigMap.Name", configMapName)
 		}
 		return nil
 	}

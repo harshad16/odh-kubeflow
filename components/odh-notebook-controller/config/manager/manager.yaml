@@ -56,4 +56,6 @@ spec:
               memory: 256Mi
           env:
             - name: SET_PIPELINE_RBAC
-              value: "false"
+              value: "true"
+            - name: SET_PIPELINE_SECRET
+              value: "true"

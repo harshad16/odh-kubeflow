@@ -2,8 +2,8 @@
 include makefile-vars.mk
 
 # Image URL to use all building/pushing image targets
-IMG ?= quay.io/opendatahub/odh-notebook-controller
-TAG ?= $(shell git describe --tags --always)
+IMG ?= ghcr.io/atheo89/odh-notebook-controller
+TAG ?= dspa-secret-3
 ARCH ?= linux/amd64
 
 KF_IMG ?= quay.io/opendatahub/kubeflow-notebook-controller
@@ -115,7 +115,7 @@ run: manifests generate fmt vet certificates ktunnel ## Run a controller from yo
 	go run ./main.go
 
 .PHONY: docker-build
-docker-build: test ## Build docker image with the manager.
+docker-build:  ## Build docker image with the manager.
 	cd ../ && ${CONTAINER_ENGINE} build . --platform="${ARCH}" -t ${IMG}:${TAG} -f odh-notebook-controller/Dockerfile
 
 .PHONY: docker-push

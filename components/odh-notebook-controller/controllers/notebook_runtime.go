@@ -90,9 +90,15 @@ func (r *OpenshiftNotebookReconciler) syncRuntimeImagesConfigMap(ctx context.Con
 				if !ok || metadataRaw == "" {
 					metadataRaw = "[]"
 				}
+				// Extract image URL
+				image_url, found, err := unstructured.NestedString(tagMap, "from", "name")
+				if err != nil || !found {
+					log.Error(err, "Failed to extract image URL from ImageStream", "ImageStream", item.GetName())
+					continue
+				}
 
 				// Parse metadata
-				metadataParsed := parseRuntimeImageMetadata(metadataRaw)
+				metadataParsed := parseRuntimeImageMetadata(metadataRaw, image_url)
 				displayName := extractDisplayName(metadataParsed)
 
 				// Construct the key name
@@ -182,12 +188,20 @@ func formatKeyName(displayName string) string {
 }
 
 // parseRuntimeImageMetadata extracts the first object from the JSON array
-func parseRuntimeImageMetadata(rawJSON string) string {
+func parseRuntimeImageMetadata(rawJSON string, image_url string) string {
 	var metadataArray []map[string]interface{}
 
 	err := json.Unmarshal([]byte(rawJSON), &metadataArray)
 	if err != nil || len(metadataArray) == 0 {
 		return "{}" // Return empty JSON object if parsing fails
+	}
+
+	// Insert image_url into the metadataArray
+	if metadataArray[0]["metadata"] != nil {
+		metadata, ok := metadataArray[0]["metadata"].(map[string]interface{})
+		if ok {
+			metadata["image_name"] = image_url
+		}
 	}
 
 	// Convert first object back to JSON

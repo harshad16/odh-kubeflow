@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-logr/logr"
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
+	dspav1 "github.com/opendatahub-io/data-science-pipelines-operator/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,84 +44,67 @@ const (
 // extractElyraRuntimeConfigInfo retrieves the essential configuration details from dspa and dashboard CRs used for pipeline execution.
 func extractElyraRuntimeConfigInfo(ctx context.Context, dynamicClient dynamic.Interface, client client.Client, notebook *nbv1.Notebook, log logr.Logger) (map[string]interface{}, error) {
 	// Define GVRs
-	dspa := schema.GroupVersionResource{
-		Group:    "datasciencepipelinesapplications.opendatahub.io",
-		Version:  "v1",
-		Resource: "datasciencepipelinesapplications",
-	}
 	dashboard := schema.GroupVersionResource{
 		Group:    "components.platform.opendatahub.io",
 		Version:  "v1alpha1",
 		Resource: "dashboards",
 	}
 
-	// Fetch DSPA CR
-	dspaObj, err := dynamicClient.Resource(dspa).Namespace(notebook.Namespace).Get(ctx, "dspa", metav1.GetOptions{})
+	publicAPIEndpoint := ""
+	// Fetch Dashboard CR
+	dashboardObj, err := dynamicClient.Resource(dashboard).Get(ctx, "default-dashboard", metav1.GetOptions{})
 	if err != nil {
-		// DSPA CR not found; skipping Elyra config generation
+		log.Error(err, "Failed to get Dashboard CR")
+	} else {
+		// Extract dashboard URL
+		status, ok := dashboardObj.Object["status"].(map[string]interface{})
+		if !ok {
+			log.Error(err, "invalid Dashboard CR: missing 'status'")
+		} else {
+			dashboardURL, ok := status["url"].(string)
+			if !ok || dashboardURL == "" {
+				log.Error(err, "invalid Dashboard CR: missing or empty 'url'")
+			} else {
+				publicAPIEndpoint = fmt.Sprintf("https://%s/experiments/%s/", dashboardURL, notebook.Namespace)
+			}
+		}
+	}
+
+	// Get the DSPA
+	dspaInstance := &dspav1.DataSciencePipelinesApplication{}
+	err = client.Get(ctx, types.NamespacedName{Name: "dspa", Namespace: notebook.Namespace}, dspaInstance)
+	if err != nil {
 		if apierrs.IsNotFound(err) {
+			// DSPA CR not found; skipping Elyra config generation
 			return nil, nil
 		}
 		log.Error(err, "Failed to get DSPA CR")
 		return nil, fmt.Errorf("error retrieving DSPA CR: %w", err)
 	}
-
-	// Fetch Dashboard CR
-	dashboardObj, err := dynamicClient.Resource(dashboard).Get(ctx, "default-dashboard", metav1.GetOptions{})
-	if err != nil {
-		log.Error(err, "Failed to get Dashboard CR")
-		return nil, fmt.Errorf("error retrieving Dashboard CR: %w", err)
-	}
-
-	// Extract dashboard URL
-	status, ok := dashboardObj.Object["status"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid Dashboard CR: missing 'status'")
-	}
-	dashboardURL, ok := status["url"].(string)
-	if !ok || dashboardURL == "" {
-		return nil, fmt.Errorf("invalid Dashboard CR: missing or empty 'url'")
-	}
-	publicAPIEndpoint := fmt.Sprintf("https://%s/experiments/%s/", dashboardURL, notebook.Namespace)
+	spec := dspaInstance.Spec
+	objectStorage := spec.ObjectStorage
+	externalStorage := objectStorage.ExternalStorage
 
 	// Extract info from DSPA spec
-	spec, ok := dspaObj.Object["spec"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 'spec'")
-	}
-	objectStorage, ok := spec["objectStorage"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 'objectStorage'")
-	}
-	externalStorage, ok := objectStorage["externalStorage"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 'externalStorage'")
-	}
 
 	// Extract host
-	host, ok := externalStorage["host"].(string)
-	if !ok || host == "" {
+	host := externalStorage.Host
+	if host == "" {
 		return nil, fmt.Errorf("invalid DSPA CR: missing or invalid 'host'")
 	}
 	cosEndpoint := fmt.Sprintf("https://%s", host)
 
 	// Extract bucket
-	cosBucket, ok := externalStorage["bucket"].(string)
-	if !ok || cosBucket == "" {
+	cosBucket := externalStorage.Bucket
+	if cosBucket == "" {
 		return nil, fmt.Errorf("invalid DSPA CR: missing or invalid 'bucket'")
 	}
 
 	// Extract S3 credentials
-	s3CredentialsSecret, ok := externalStorage["s3CredentialsSecret"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 's3CredentialsSecret'")
-	}
-	cosSecret, ok := s3CredentialsSecret["secretName"].(string)
-	usernameKey, ok1 := s3CredentialsSecret["accessKey"].(string)
-	passwordKey, ok2 := s3CredentialsSecret["secretKey"].(string)
-	if !ok || !ok1 || !ok2 {
-		return nil, fmt.Errorf("invalid DSPA CR: incomplete 's3CredentialsSecret'")
-	}
+	s3CredentialsSecret := externalStorage.S3CredentialSecret
+	cosSecret := s3CredentialsSecret.SecretName
+	usernameKey := s3CredentialsSecret.AccessKey
+	passwordKey := s3CredentialsSecret.SecretKey
 
 	// Fetch secret for credentials
 	dashboardSecret := &corev1.Secret{}
@@ -144,22 +128,7 @@ func extractElyraRuntimeConfigInfo(ctx context.Context, dynamicClient dynamic.In
 	cosPassword := string(passwordVal)
 
 	// Extract API Endpoint from DSPA status
-	status, ok = dspaObj.Object["status"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 'status'")
-	}
-	components, ok := status["components"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 'components' in status")
-	}
-	apiServer, ok := components["apiServer"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid DSPA CR: missing 'apiServer' in components")
-	}
-	apiEndpoint, ok := apiServer["externalUrl"].(string)
-	if !ok || apiEndpoint == "" {
-		return nil, fmt.Errorf("invalid DSPA CR: missing or invalid 'externalUrl' for apiServer")
-	}
+	apiEndpoint := dspaInstance.Status.Components.APIServer.ExternalUrl
 
 	// Construct and return the DSPA config
 	return map[string]interface{}{

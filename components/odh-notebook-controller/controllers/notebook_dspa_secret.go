@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/go-logr/logr"
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
@@ -107,7 +108,11 @@ func extractElyraRuntimeConfigInfo(ctx context.Context, dashboardInstance map[st
 	if host == "" {
 		return nil, fmt.Errorf("invalid DSPA CR: missing or invalid 'host'")
 	}
-	cosEndpoint := fmt.Sprintf("https://%s", host)
+	// check if host include https:// or http:// if not add https://
+	if !strings.HasPrefix(host, "https://") && !strings.HasPrefix(host, "http://") {
+		host = "https://" + host
+	}
+	cosEndpoint := host
 
 	cosBucket := externalStorage.Bucket
 	if cosBucket == "" {

@@ -175,14 +175,6 @@ undeploy: setup undeploy-kf ## Undeploy controller from the Openshift cluster.
 undeploy-dev: setup undeploy-kf ## Undeploy controller from the Openshift cluster.
 	$(KUSTOMIZE) build config/development | oc delete --ignore-not-found=true -f -
 
-e2e-test-%:
-	$(eval deploymentMode:=$(subst e2e-test-,,$@))
-	# Default timeout is 10m but we need to increase it to 20m for the e2e tests
-	go test ./e2e/ -timeout=20m -run ^TestE2ENotebookController -v \
-		--nb-namespace=$(K8S_NAMESPACE) \
-		--deploymentMode=$(deploymentMode) \
-		${E2E_TEST_FLAGS}
-
 .PHONY: e2e-test
 e2e-test: ## Run e2e tests for the controller
 	go test ./e2e/ -run ^TestE2ENotebookController -v --nb-namespace=${K8S_NAMESPACE} ${E2E_TEST_FLAGS}

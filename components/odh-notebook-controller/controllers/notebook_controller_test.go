@@ -474,7 +474,19 @@ var _ = Describe("The Openshift Notebook controller", func() {
 			Namespace = "default"
 		)
 
-		notebook := createNotebook(Name, Namespace)
+		notebook := &nbv1.Notebook{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      Name,
+				Namespace: Namespace,
+			},
+			Spec: nbv1.NotebookSpec{
+				Template: nbv1.NotebookTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name:  Name,
+						Image: "registry.redhat.io/ubi8/ubi:latest",
+					}}}},
+			},
+		}
 
 		It("Should update the Notebook specification", func() {
 			By("By creating a new Notebook")

@@ -17,9 +17,10 @@ package controllers
 
 import (
 	"context"
+	"reflect"
+
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
-	"reflect"
 
 	"github.com/go-logr/logr"
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
@@ -36,8 +37,8 @@ const (
 	NotebookPort      = 8888
 )
 
-// ReconcileAllNetworkPolicies will manage the network policies reconciliation
-// required by the notebook.
+// ReconcileNetworkPolicies will manage the network policies reconciliation
+// required by the notebook
 func (r *OpenshiftNotebookReconciler) ReconcileAllNetworkPolicies(notebook *nbv1.Notebook, ctx context.Context) error {
 	// Initialize logger format
 	log := r.Log.WithValues("notebook", notebook.Name, "namespace", notebook.Namespace)
@@ -52,38 +53,29 @@ func (r *OpenshiftNotebookReconciler) ReconcileAllNetworkPolicies(notebook *nbv1
 		return err
 	}
 
-	if !ServiceMeshIsEnabled(notebook.ObjectMeta) {
-		desiredOAuthNetworkPolicy := NewOAuthNetworkPolicy(notebook)
-		err = r.reconcileNetworkPolicy(desiredOAuthNetworkPolicy, ctx, notebook)
-		if err != nil {
-			log.Error(err, "error creating Notebook OAuth network policy")
-			return err
-		}
-	}
-
 	return nil
 }
 
-func (r *OpenshiftNotebookReconciler) reconcileNetworkPolicy(desiredNetworkPolicy *netv1.NetworkPolicy, ctx context.Context, notebook *nbv1.Notebook) error {
+func (r *OpenshiftNotebookReconciler) reconcileNetworkPolicy(desirednetworkPolicy *netv1.NetworkPolicy, ctx context.Context, notebook *nbv1.Notebook) error {
 
 	// Create the Network Policy if it does not already exist
 	foundNetworkPolicy := &netv1.NetworkPolicy{}
 	justCreated := false
 	err := r.Get(ctx, types.NamespacedName{
-		Name:      desiredNetworkPolicy.GetName(),
+		Name:      desirednetworkPolicy.GetName(),
 		Namespace: notebook.GetNamespace(),
 	}, foundNetworkPolicy)
 	if err != nil {
 		if apierrs.IsNotFound(err) {
-			r.Log.Info("Creating Network Policy", "name", desiredNetworkPolicy.Name)
+			r.Log.Info("Creating Network Policy", "name", desirednetworkPolicy.Name)
 			// Add .metatada.ownerReferences to the Network Policy to be deleted by
 			// the Kubernetes garbage collector if the notebook is deleted
-			err = ctrl.SetControllerReference(notebook, desiredNetworkPolicy, r.Scheme)
+			err = ctrl.SetControllerReference(notebook, desirednetworkPolicy, r.Scheme)
 			if err != nil {
 				return err
 			}
 			// Create the NetworkPolicy in the Openshift cluster
-			err = r.Create(ctx, desiredNetworkPolicy)
+			err = r.Create(ctx, desirednetworkPolicy)
 			if err != nil && !apierrs.IsAlreadyExists(err) {
 				return err
 			}
@@ -94,21 +86,21 @@ func (r *OpenshiftNotebookReconciler) reconcileNetworkPolicy(desiredNetworkPolic
 	}
 
 	// Reconcile the NetworkPolicy spec if it has been manually modified
-	if !justCreated && !CompareNotebookNetworkPolicies(*desiredNetworkPolicy, *foundNetworkPolicy) {
+	if !justCreated && !CompareNotebookNetworkPolicies(*desirednetworkPolicy, *foundNetworkPolicy) {
 		r.Log.Info("Reconciling Network policy", "name", foundNetworkPolicy.Name)
 		// Retry the update operation when the ingress controller eventually
 		// updates the resource version field
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			// Get the last route revision
 			if err := r.Get(ctx, types.NamespacedName{
-				Name:      desiredNetworkPolicy.Name,
+				Name:      desirednetworkPolicy.Name,
 				Namespace: notebook.Namespace,
 			}, foundNetworkPolicy); err != nil {
 				return err
 			}
 			// Reconcile labels and spec field
-			foundNetworkPolicy.Spec = desiredNetworkPolicy.Spec
-			foundNetworkPolicy.ObjectMeta.Labels = desiredNetworkPolicy.ObjectMeta.Labels
+			foundNetworkPolicy.Spec = desirednetworkPolicy.Spec
+			foundNetworkPolicy.ObjectMeta.Labels = desirednetworkPolicy.ObjectMeta.Labels
 			return r.Update(ctx, foundNetworkPolicy)
 		})
 		if err != nil {

@@ -55,13 +55,25 @@ var _ = Describe("The Openshift Notebook controller", func() {
 		interval = 200 * time.Millisecond
 	)
 
-	When("Creating a Notebook", func() {
+	Context("When creating a Notebook", func() {
 		const (
 			Name      = "test-notebook"
 			Namespace = "default"
 		)
 
-		notebook := createNotebook(Name, Namespace)
+		notebook := &nbv1.Notebook{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      Name,
+				Namespace: Namespace,
+			},
+			Spec: nbv1.NotebookSpec{
+				Template: nbv1.NotebookTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name:  Name,
+						Image: "registry.redhat.io/ubi8/ubi:latest",
+					}}}},
+			},
+		}
 
 		expectedRoute := routev1.Route{
 			ObjectMeta: metav1.ObjectMeta{
@@ -450,7 +462,7 @@ var _ = Describe("The Openshift Notebook controller", func() {
 			Eventually(func() error {
 				key := types.NamespacedName{Name: Name, Namespace: Namespace}
 				return cli.Get(ctx, key, notebook)
-			}, duration, interval).Should(HaveOccurred())
+			}, timeout, interval).Should(HaveOccurred())
 		})
 
 	})
@@ -557,13 +569,25 @@ var _ = Describe("The Openshift Notebook controller", func() {
 		})
 	})
 
-	When("Creating a Notebook, test Networkpolicies", func() {
+	Context("When creating a Notebook, test Networkpolicies", func() {
 		const (
 			Name      = "test-notebook-np"
 			Namespace = "default"
 		)
 
-		notebook := createNotebook(Name, Namespace)
+		notebook := &nbv1.Notebook{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      Name,
+				Namespace: Namespace,
+			},
+			Spec: nbv1.NotebookSpec{
+				Template: nbv1.NotebookTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name:  Name,
+						Image: "registry.redhat.io/ubi8/ubi:latest",
+					}}}},
+			},
+		}
 
 		npProtocol := corev1.ProtocolTCP
 		testPodNamespace := odhNotebookControllerTestNamespace
@@ -608,8 +632,34 @@ var _ = Describe("The Openshift Notebook controller", func() {
 				},
 			},
 		}
-
-		expectedNotebookOAuthNetworkPolicy := createOAuthNetworkPolicy(notebook.Name, notebook.Namespace, npProtocol, NotebookOAuthPort)
+		expectedNotebookOAuthNetworkPolicy := netv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      notebook.Name + "-oauth-np",
+				Namespace: notebook.Namespace,
+			},
+			Spec: netv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"notebook-name": notebook.Name,
+					},
+				},
+				Ingress: []netv1.NetworkPolicyIngressRule{
+					{
+						Ports: []netv1.NetworkPolicyPort{
+							{
+								Protocol: &npProtocol,
+								Port: &intstr.IntOrString{
+									IntVal: NotebookOAuthPort,
+								},
+							},
+						},
+					},
+				},
+				PolicyTypes: []netv1.PolicyType{
+					netv1.PolicyTypeIngress,
+				},
+			},
+		}
 
 		notebookNetworkPolicy := &netv1.NetworkPolicy{}
 		notebookOAuthNetworkPolicy := &netv1.NetworkPolicy{}
@@ -680,17 +730,19 @@ var _ = Describe("The Openshift Notebook controller", func() {
 
 			By("By deleting the recently created Notebook")
 			Expect(cli.Delete(ctx, notebook)).Should(Succeed())
+			time.Sleep(interval)
 
 			By("By checking that the Notebook is deleted")
 			Eventually(func() error {
 				key := types.NamespacedName{Name: Name, Namespace: Namespace}
 				return cli.Get(ctx, key, notebook)
-			}, duration, interval).Should(HaveOccurred())
+			}, timeout, interval).Should(HaveOccurred())
+			time.Sleep(interval)
 		})
 
 	})
 
-	When("Creating a Notebook with OAuth", func() {
+	Context("When creating a Notebook with the OAuth annotation enabled", func() {
 		const (
 			Name      = "test-notebook-oauth"
 			Namespace = "default"
@@ -749,7 +801,89 @@ var _ = Describe("The Openshift Notebook controller", func() {
 								Name:  Name,
 								Image: "registry.redhat.io/ubi9/ubi:latest",
 							},
-							createOAuthContainer(Name, Namespace),
+							{
+								Name:            "oauth-proxy",
+								Image:           oauthProxyImage,
+								ImagePullPolicy: corev1.PullAlways,
+								Env: []corev1.EnvVar{{
+									Name: "NAMESPACE",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.namespace",
+										},
+									},
+								}},
+								Args: []string{
+									"--provider=openshift",
+									"--https-address=:8443",
+									"--http-address=",
+									"--openshift-service-account=" + Name,
+									"--cookie-secret-file=/etc/oauth/config/cookie_secret",
+									"--cookie-expire=24h0m0s",
+									"--tls-cert=/etc/tls/private/tls.crt",
+									"--tls-key=/etc/tls/private/tls.key",
+									"--upstream=http://localhost:8888",
+									"--upstream-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+									"--email-domain=*",
+									"--skip-provider-button",
+									`--openshift-sar={"verb":"get","resource":"notebooks","resourceAPIGroup":"kubeflow.org",` +
+										`"resourceName":"` + Name + `","namespace":"$(NAMESPACE)"}`,
+									"--logout-url=https://example.notebook-url/notebook/" + Namespace + "/" + Name,
+								},
+								Ports: []corev1.ContainerPort{{
+									Name:          OAuthServicePortName,
+									ContainerPort: 8443,
+									Protocol:      corev1.ProtocolTCP,
+								}},
+								LivenessProbe: &corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										HTTPGet: &corev1.HTTPGetAction{
+											Path:   "/oauth/healthz",
+											Port:   intstr.FromString(OAuthServicePortName),
+											Scheme: corev1.URISchemeHTTPS,
+										},
+									},
+									InitialDelaySeconds: 30,
+									TimeoutSeconds:      1,
+									PeriodSeconds:       5,
+									SuccessThreshold:    1,
+									FailureThreshold:    3,
+								},
+								ReadinessProbe: &corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										HTTPGet: &corev1.HTTPGetAction{
+											Path:   "/oauth/healthz",
+											Port:   intstr.FromString(OAuthServicePortName),
+											Scheme: corev1.URISchemeHTTPS,
+										},
+									},
+									InitialDelaySeconds: 5,
+									TimeoutSeconds:      1,
+									PeriodSeconds:       5,
+									SuccessThreshold:    1,
+									FailureThreshold:    3,
+								},
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										"cpu":    resource.MustParse("100m"),
+										"memory": resource.MustParse("64Mi"),
+									},
+									Limits: corev1.ResourceList{
+										"cpu":    resource.MustParse("100m"),
+										"memory": resource.MustParse("64Mi"),
+									},
+								},
+								VolumeMounts: []corev1.VolumeMount{
+									{
+										Name:      "oauth-config",
+										MountPath: "/etc/oauth/config",
+									},
+									{
+										Name:      "tls-certificates",
+										MountPath: "/etc/tls/private",
+									},
+								},
+							},
 						},
 						Volumes: []corev1.Volume{
 							{
@@ -827,7 +961,19 @@ var _ = Describe("The Openshift Notebook controller", func() {
 		})
 
 		serviceAccount := &corev1.ServiceAccount{}
-		expectedServiceAccount := createOAuthServiceAccount(Name, Namespace)
+		expectedServiceAccount := corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      Name,
+				Namespace: Namespace,
+				Labels: map[string]string{
+					"notebook-name": Name,
+				},
+				Annotations: map[string]string{
+					"serviceaccounts.openshift.io/oauth-redirectreference.first": "" +
+						`{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"` + Name + `"}}`,
+				},
+			},
+		}
 
 		It("Should create a Service Account for the notebook", func() {
 			By("By checking that the controller has created the Service Account")
@@ -900,7 +1046,7 @@ var _ = Describe("The Openshift Notebook controller", func() {
 			Eventually(func() error {
 				key := types.NamespacedName{Name: Name + "-oauth-config", Namespace: Namespace}
 				return cli.Get(ctx, key, secret)
-			}, duration, interval).Should(Succeed())
+			}, timeout, interval).ShouldNot(HaveOccurred())
 
 			By("By checking that the cookie secret format is correct")
 			Expect(len(secret.Data["cookie_secret"])).Should(Equal(32))
@@ -914,7 +1060,7 @@ var _ = Describe("The Openshift Notebook controller", func() {
 			Eventually(func() error {
 				key := types.NamespacedName{Name: Name + "-oauth-config", Namespace: Namespace}
 				return cli.Get(ctx, key, secret)
-			}, duration, interval).Should(Succeed())
+			}, timeout, interval).ShouldNot(HaveOccurred())
 		})
 
 		route := &routev1.Route{}
@@ -1116,75 +1262,6 @@ var _ = Describe("The Openshift Notebook controller", func() {
 				return cli.Get(ctx, notebookKey, notebook)
 			}, duration, interval).Should(HaveOccurred())
 		})
-	})
-
-	When("Creating notebook as part of Service Mesh", func() {
-
-		const (
-			name      = "test-notebook-mesh"
-			namespace = "mesh-ns"
-		)
-		testNamespaces = append(testNamespaces, namespace)
-
-		notebookOAuthNetworkPolicy := createOAuthNetworkPolicy(name, namespace, corev1.ProtocolTCP, NotebookOAuthPort)
-
-		It("Should not add OAuth sidecar", func() {
-			notebook := createNotebook(name, namespace)
-			notebook.SetAnnotations(map[string]string{AnnotationServiceMesh: "true"})
-			Expect(cli.Create(ctx, notebook)).Should(Succeed())
-
-			actualNotebook := &nbv1.Notebook{}
-			Eventually(func() error {
-				key := types.NamespacedName{Name: name, Namespace: namespace}
-				return cli.Get(ctx, key, actualNotebook)
-			}, duration, interval).Should(Succeed())
-
-			Expect(actualNotebook.Spec.Template.Spec.Containers).To(Not(ContainElement(createOAuthContainer(name, namespace))))
-		})
-
-		It("Should not define OAuth network policy", func() {
-			policies := &netv1.NetworkPolicyList{}
-			Eventually(func() error {
-				return cli.List(ctx, policies, client.InNamespace(namespace))
-			}, duration, interval).Should(Succeed())
-
-			Expect(policies.Items).To(Not(ContainElement(notebookOAuthNetworkPolicy)))
-		})
-
-		It("Should not create routes", func() {
-			routes := &routev1.RouteList{}
-			Eventually(func() error {
-				return cli.List(ctx, routes, client.InNamespace(namespace))
-			}, duration, interval).Should(Succeed())
-
-			Expect(routes.Items).To(BeEmpty())
-		})
-
-		It("Should not create OAuth Service Account", func() {
-			oauthServiceAccount := createOAuthServiceAccount(name, namespace)
-
-			serviceAccounts := &corev1.ServiceAccountList{}
-			Eventually(func() error {
-				return cli.List(ctx, serviceAccounts, client.InNamespace(namespace))
-			}, duration, interval).Should(Succeed())
-
-			Expect(serviceAccounts.Items).ToNot(ContainElement(oauthServiceAccount))
-		})
-
-		It("Should not create OAuth secret", func() {
-			secrets := &corev1.SecretList{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "SecretList",
-					APIVersion: "v1",
-				},
-			}
-			Eventually(func() error {
-				return cli.List(ctx, secrets, client.InNamespace(namespace))
-			}, duration, interval).Should(Succeed())
-
-			Expect(secrets.Items).To(BeEmpty())
-		})
-
 	})
 
 	When("Checking ds-pipeline-config secret lifecycle", func() {

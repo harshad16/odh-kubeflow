@@ -79,13 +79,13 @@ const (
 	LastImageSelectionAnnotation      = "notebooks.opendatahub.io/last-image-selection"
 )
 
-// InjectReconciliationLock injects the kubeflow notebook controller culling
+// InjectReconciliationLock injects the kubefllow notebook controller culling
 // stop annotation to explicitly start the notebook pod when the ODH notebook
-// controller finishes the reconciliation. Otherwise, a race condition may happen
+// controller finishes the reconciliation. Otherwise a race condition may happen
 // while mounting the notebook service account pull secret into the pod.
 //
 // The ODH notebook controller will remove this annotation when the first
-// reconciliation is completed (see RemoveReconciliationLock).
+// reconcilitation is completed (see RemoveReconciliationLock).
 func InjectReconciliationLock(meta *metav1.ObjectMeta) error {
 	if meta.Annotations != nil {
 		meta.Annotations[culler.STOP_ANNOTATION] = AnnotationValueReconciliationLock
@@ -443,10 +443,6 @@ func (w *NotebookWebhook) Handle(ctx context.Context, req admission.Request) adm
 
 	// Inject the OAuth proxy if the annotation is present but only if Service Mesh is disabled
 	if OAuthInjectionIsEnabled(notebook.ObjectMeta) {
-		if ServiceMeshIsEnabled(notebook.ObjectMeta) {
-			return admission.Denied(fmt.Sprintf("Cannot have both %s and %s set to true. Pick one.", AnnotationServiceMesh, AnnotationInjectOAuth))
-		}
-
 		// Inject OAuth proxy
 		err = InjectOAuthProxy(notebook, w.OAuthConfig)
 		if err != nil {

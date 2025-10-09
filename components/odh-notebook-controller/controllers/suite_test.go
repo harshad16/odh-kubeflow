@@ -40,9 +40,7 @@ import (
 	imagev1 "github.com/openshift/api/image/v1"
 	oauthv1 "github.com/openshift/api/oauth/v1"
 	routev1 "github.com/openshift/api/route/v1"
-	v1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -238,15 +236,6 @@ var _ = BeforeSuite(func() {
 
 	// Verify kubernetes client is working
 	Expect(cli).ToNot(BeNil())
-
-	for _, namespace := range testNamespaces {
-		ns := &v1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-			},
-		}
-		Expect(cli.Create(ctx, ns)).To(Succeed())
-	}
 
 }, 60)
 

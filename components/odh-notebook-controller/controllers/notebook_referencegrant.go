@@ -17,6 +17,7 @@ package controllers
 
 import (
 	"context"
+	"reflect"
 
 	nbv1 "github.com/kubeflow/kubeflow/components/notebook-controller/api/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
@@ -125,9 +126,17 @@ func (r *OpenshiftNotebookReconciler) ReconcileReferenceGrant(notebook *nbv1.Not
 			}
 		}
 
+		// Check if labels match
+		if !needsUpdate {
+			if !reflect.DeepEqual(foundRefGrant.ObjectMeta.Labels, desiredRefGrant.ObjectMeta.Labels) {
+				needsUpdate = true
+			}
+		}
+
 		if needsUpdate {
-			log.Info("Updating ReferenceGrant to match desired spec")
+			log.Info("Updating ReferenceGrant to match desired spec and labels")
 			foundRefGrant.Spec = desiredRefGrant.Spec
+			foundRefGrant.ObjectMeta.Labels = desiredRefGrant.ObjectMeta.Labels
 			err = r.Update(ctx, foundRefGrant)
 			if err != nil {
 				log.Error(err, "Unable to update ReferenceGrant")

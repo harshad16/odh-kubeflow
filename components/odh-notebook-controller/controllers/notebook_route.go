@@ -246,13 +246,18 @@ func (r *OpenshiftNotebookReconciler) DeleteHTTPRouteForNotebook(notebook *nbv1.
 	}
 
 	// Delete all matching HTTPRoutes
+	var deletionErrors []error
 	for _, httpRoute := range httpRouteList.Items {
 		log.Info("Deleting HTTPRoute from central namespace", "httpRoute", httpRoute.Name)
 		err = r.Delete(ctx, &httpRoute)
 		if err != nil && !apierrs.IsNotFound(err) {
 			log.Error(err, "Unable to delete HTTPRoute", "httpRoute", httpRoute.Name)
-			return err
+			deletionErrors = append(deletionErrors, fmt.Errorf("failed to delete HTTPRoute %s: %w", httpRoute.Name, err))
 		}
+	}
+
+	if len(deletionErrors) > 0 {
+		return fmt.Errorf("failed to delete some HTTPRoutes: %v", deletionErrors)
 	}
 
 	log.Info("Successfully deleted HTTPRoute(s) for notebook")

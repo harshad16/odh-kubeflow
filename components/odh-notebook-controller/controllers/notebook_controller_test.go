@@ -245,6 +245,31 @@ var _ = Describe("The Openshift Notebook controller", func() {
 			}, duration, interval).Should(Equal(odhNotebookControllerTestNamespace))
 		})
 
+		It("Should reconcile the ReferenceGrant labels when modified", func() {
+			By("By modifying the ReferenceGrant labels")
+			Eventually(func() error {
+				if err := cli.Get(ctx, referenceGrantKey, referenceGrant); err != nil {
+					return err
+				}
+				// Corrupt the labels by changing them
+				referenceGrant.Labels = map[string]string{
+					"wrong-label": "wrong-value",
+				}
+				return cli.Update(ctx, referenceGrant)
+			}, duration, interval).Should(Succeed())
+
+			By("By checking that the controller has restored the ReferenceGrant labels")
+			Eventually(func() map[string]string {
+				if err := cli.Get(ctx, referenceGrantKey, referenceGrant); err != nil {
+					return nil
+				}
+				return referenceGrant.Labels
+			}, duration, interval).Should(And(
+				HaveKeyWithValue("app.kubernetes.io/managed-by", "odh-notebook-controller"),
+				HaveKeyWithValue("opendatahub.io/component", "notebook-controller"),
+			))
+		})
+
 		It("Should keep ReferenceGrant when deleting notebook if other notebooks exist", func() {
 			By("By creating a second notebook in the same namespace")
 			notebook2 := createNotebook(Name+"-second", Namespace)
@@ -453,11 +478,11 @@ var _ = Describe("The Openshift Notebook controller", func() {
 				// Clean up the ConfigMap after the test
 				if err := cli.Delete(ctx, trustedCACertBundle); err != nil {
 					// Log the error without failing the test
-					logger.Info("Error occurred during deletion of ConfigMap: %v", err)
+					logger.Info("Error occurred during deletion of ConfigMap", "error", err)
 				}
 				if err := cli.Delete(ctx, serviceCACertBundle); err != nil {
 					// Log the error without failing the test
-					logger.Info("Error occurred during deletion of ConfigMap: %v", err)
+					logger.Info("Error occurred during deletion of ConfigMap", "error", err)
 				}
 			}()
 
@@ -709,7 +734,7 @@ var _ = Describe("The Openshift Notebook controller", func() {
 				// Clean up the ConfigMap after the test
 				if err := cli.Delete(ctx, trustedCACertBundle); err != nil {
 					// Log the error without failing the test
-					logger.Info("Error occurred during deletion of ConfigMap: %v", err)
+					logger.Info("Error occurred during deletion of ConfigMap", "error", err)
 				}
 			}()
 

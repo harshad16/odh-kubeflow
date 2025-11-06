@@ -64,6 +64,13 @@ func NewNotebookReferenceGrant(namespace string, centralNamespace string) *gatew
 	}
 }
 
+// CompareNotebookReferenceGrants checks if two ReferenceGrants are equal, if not return false
+func CompareNotebookReferenceGrants(rg1 gatewayv1beta1.ReferenceGrant, rg2 gatewayv1beta1.ReferenceGrant) bool {
+	// Two ReferenceGrants will be equal if the labels and specs are identical
+	return reflect.DeepEqual(rg1.Labels, rg2.Labels) &&
+		reflect.DeepEqual(rg1.Spec, rg2.Spec)
+}
+
 // ReconcileReferenceGrant ensures a ReferenceGrant exists in the Notebook's namespace
 // to allow HTTPRoutes from the central namespace to reference backend Services.
 // Only one ReferenceGrant per namespace is needed, shared by all Notebooks in that namespace.
@@ -97,46 +104,11 @@ func (r *OpenshiftNotebookReconciler) ReconcileReferenceGrant(notebook *nbv1.Not
 			return err
 		}
 	} else {
-		// ReferenceGrant exists - verify it has correct spec
-		needsUpdate := false
-
-		// Check if From rules match
-		if len(foundRefGrant.Spec.From) != len(desiredRefGrant.Spec.From) {
-			needsUpdate = true
-		} else if len(foundRefGrant.Spec.From) > 0 {
-			from := foundRefGrant.Spec.From[0]
-			desiredFrom := desiredRefGrant.Spec.From[0]
-			if from.Group != desiredFrom.Group ||
-				from.Kind != desiredFrom.Kind ||
-				from.Namespace != desiredFrom.Namespace {
-				needsUpdate = true
-			}
-		}
-
-		// Check if To rules match
-		if !needsUpdate {
-			if len(foundRefGrant.Spec.To) != len(desiredRefGrant.Spec.To) {
-				needsUpdate = true
-			} else if len(foundRefGrant.Spec.To) > 0 {
-				to := foundRefGrant.Spec.To[0]
-				desiredTo := desiredRefGrant.Spec.To[0]
-				if to.Group != desiredTo.Group || to.Kind != desiredTo.Kind {
-					needsUpdate = true
-				}
-			}
-		}
-
-		// Check if labels match
-		if !needsUpdate {
-			if !reflect.DeepEqual(foundRefGrant.ObjectMeta.Labels, desiredRefGrant.ObjectMeta.Labels) {
-				needsUpdate = true
-			}
-		}
-
-		if needsUpdate {
+		// ReferenceGrant exists - verify it matches the desired state
+		if !CompareNotebookReferenceGrants(*desiredRefGrant, *foundRefGrant) {
 			log.Info("Updating ReferenceGrant to match desired spec and labels")
 			foundRefGrant.Spec = desiredRefGrant.Spec
-			foundRefGrant.ObjectMeta.Labels = desiredRefGrant.ObjectMeta.Labels
+			foundRefGrant.Labels = desiredRefGrant.Labels
 			err = r.Update(ctx, foundRefGrant)
 			if err != nil {
 				log.Error(err, "Unable to update ReferenceGrant")

@@ -10,8 +10,8 @@ on:
         type: string
 
 env:
-  REPO_ORG: opendatahub-io
-  REPO_NAME: kubeflow
+  REPO_ORG: harshad16
+  REPO_NAME: odh-kubeflow
   RELEASE_BRANCH: v1.10-branch
 
 permissions:

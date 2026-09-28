@@ -1,6 +1,6 @@
 module github.com/kubeflow/kubeflow/components/notebook-controller
 
-go 1.25.7
+go 1.25.9
 
 require (
 	github.com/go-logr/logr v1.4.3
